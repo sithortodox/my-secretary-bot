@@ -22,6 +22,7 @@ escalation_router = Router()
 
 
 _notified_connections: set = set()
+_pause_tasks: dict[tuple[int, int], asyncio.Task] = {}  # (owner_id, chat_id) -> Task
 
 # Ключевые слова для быстрого определения срочности (без LLM)
 URGENCY_KEYWORDS = {
@@ -132,6 +133,22 @@ async def handle_business_message(message: Message, bot: Bot):
         await clear_offline_notified_chat(owner_id, message.chat.id)
         return
 
+    # Проверка rate limit (ПОСЛЕ получения owner_id)
+    from services.rate_limiter import is_rate_limited, get_rate_limit_remaining
+    if is_rate_limited(message.from_user.id, owner_id):
+        logger.info(f"[RATE_LIMIT] Message from {message.from_user.id} blocked (limit exceeded)")
+        # Опционально: отправить уведомление владельцу об одноразовой блокировке
+        try:
+            remaining = get_rate_limit_remaining(message.from_user.id, owner_id)
+            await bot.send_message(
+                chat_id=owner_id,
+                text=f"⚠️ Получено слишком много сообщений от одного контакта. "
+                     f"Бот пропустит это сообщение. Осталось: {remaining} в минуту."
+            )
+        except Exception:
+            pass
+        return  # Пропускаем обработку
+
     # Определяем тип контента
     media_type = _get_media_type(message)
     user_text = message.text or message.caption or ""
@@ -146,12 +163,21 @@ async def handle_business_message(message: Message, bot: Bot):
     if not user_text and media_type in ("document", "video"):
         return
 
-    user = await get_user(owner_id)
-    if not user:
-        logger.warning(f"[MSG] owner_id={owner_id} not found in DB")
-        return
-
-    if not user["is_enabled"]:
+    # Получение информации о пользователе с обработкой ошибок
+    try:
+        user = await get_user(owner_id)
+    except Exception as e:
+        logger.error(f"[DB_ERROR] Failed to get user {owner_id}: {e}")
+        # Graceful degradation - используем дефолтные значения
+        user = {
+            "is_enabled": True,
+            "active_model": LLM_MODEL,
+            "system_prompt": None,
+            "escalation_enabled": True,
+            "offline_mode": False,
+        }
+    
+    if not user or not user.get("is_enabled"):
         logger.debug(f"[MSG] owner_id={owner_id} auto-reply is OFF, skipping")
         return
 
@@ -214,7 +240,10 @@ async def handle_business_message(message: Message, bot: Bot):
     elif media_type == "video":
         display_text = user_text if user_text else "[видео]"
 
-    await save_message(owner_id, chat_id, "user", display_text)
+    try:
+        await save_message(owner_id, chat_id, "user", display_text)
+    except Exception as e:
+        logger.error(f"[DB_ERROR] Failed to save message: {e}")
 
     try:
         await bot.send_chat_action(
@@ -226,16 +255,37 @@ async def handle_business_message(message: Message, bot: Bot):
         logger.debug(f"[TYPING] Failed: {e}")
 
     # Считаем сколько раз уже общались
-    prev_messages = await get_chat_messages(owner_id, chat_id, limit=100)
-    msg_count = len(prev_messages)
+    try:
+        prev_messages = await get_chat_messages(owner_id, chat_id, limit=100)
+    except Exception as e:
+        logger.error(f"[DB_ERROR] Failed to get chat messages: {e}")
+        prev_messages = []
+    msg_count = len(prev_messages or [])
     is_first = msg_count <= 1  # текущее сообщение уже сохранено
 
     # Заметка о контакте
-    note = await get_note(owner_id, chat_id)
+    try:
+        note = await get_note(owner_id, chat_id)
+    except Exception as e:
+        logger.error(f"[DB_ERROR] Failed to get note: {e}")
+        note = ""
 
     # Анализ переписки за 30 дней
-    history_30_days = await get_history_30_days(owner_id, chat_id)
-    chat_stats = await get_chat_stats_30_days(owner_id, chat_id)
+    history_30_days = []
+    chat_stats = None
+    try:
+        history_30_days = await get_history_30_days(owner_id, chat_id)
+        chat_stats = await get_chat_stats_30_days(owner_id, chat_id)
+    except Exception as e:
+        logger.error(f"[DB_ERROR] Failed to get 30-day history/stats: {e}")
+        history_30_days = []
+        chat_stats = {
+            "user_messages": 0,
+            "bot_messages": 0,
+            "total_messages": 0,
+            "first_message": None,
+            "last_message": None,
+        }
     deep_analysis = None
 
     if len(history_30_days) >= 10:
@@ -538,8 +588,14 @@ async def _generate_and_send_reply(
         try:
             photo = message.photo[-1]
             file = await bot.get_file(photo.file_id)
-            from config import BOT_TOKEN
-            image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+            
+            # Безопасная загрузка файла в память (без暴露 токена в URL)
+            file_bytes = await bot.download(file)
+            
+            # Конвертируем в base64 для vision API
+            import base64
+            image_base64 = base64.b64encode(file_bytes).decode('utf-8')
+            image_url = f"data:image/jpeg;base64,{image_base64}"
 
             vision_prompt = (
                 "Ты — AI-ассистент встроенный в Telegram профиль пользователя. "
@@ -749,9 +805,27 @@ async def on_escalation_auto(callback, bot: Bot) -> None:
 
 async def on_escalation_pause(callback, bot: Bot) -> None:
     """Обработчик кнопки 'Пауза' — ставит чат на паузу."""
-    parts = callback.data.split(":")
-    chat_id = int(parts[2])
+    from services.utils import safe_split_callback, safe_int
+    
+    parts = safe_split_callback(callback.data, min_parts=3)
+    if not parts:
+        await callback.answer("❌ Invalid callback data", show_alert=True)
+        return
+    
+    chat_id = safe_int(parts[2], "chat_id")
+    if chat_id is None:
+        await callback.answer("❌ Invalid chat ID", show_alert=True)
+        return
+    
     owner_id = callback.from_user.id
+    pause_key = (owner_id, chat_id)
+
+    # Отменяем старую задачу паузы если существует
+    if pause_key in _pause_tasks:
+        old_task = _pause_tasks[pause_key]
+        if not old_task.done():
+            old_task.cancel()
+            logger.info(f"[ESCALATION] Cancelled old pause task for {pause_key}")
 
     await set_escalated(owner_id, chat_id, True)
     await callback.answer(
@@ -762,18 +836,26 @@ async def on_escalation_pause(callback, bot: Bot) -> None:
 
     # Автоматическое снятие паузы через 30 минут
     async def _unpause():
-        await asyncio.sleep(1800)  # 30 минут
-        await set_escalated(owner_id, chat_id, False)
-        logger.info(f"[ESCALATION] owner_id={owner_id} chat_id={chat_id} auto-unpaused")
         try:
-            await bot.send_message(
-                owner_id,
-                f"✅ Пауза для чата {chat_id} окончена. Бот снова отвечает."
-            )
-        except Exception:
-            pass
+            await asyncio.sleep(1800)  # 30 минут
+            await set_escalated(owner_id, chat_id, False)
+            logger.info(f"[ESCALATION] owner_id={owner_id} chat_id={chat_id} auto-unpaused")
+            try:
+                await bot.send_message(
+                    owner_id,
+                    f"✅ Пауза для чата {chat_id} окончена. Бот снова отвечает."
+                )
+            except Exception:
+                pass
+        except asyncio.CancelledError:
+            logger.debug(f"[ESCALATION] Pause task cancelled for {pause_key}")
+        finally:
+            # Удаляем задачу из словаря
+            _pause_tasks.pop(pause_key, None)
 
-    asyncio.create_task(_unpause())
+    # Создаём и отслеживаем задачу
+    task = asyncio.create_task(_unpause())
+    _pause_tasks[pause_key] = task
 
 
 # ── Обработчики кнопок эскалации ─────────────────────────────────────────────
