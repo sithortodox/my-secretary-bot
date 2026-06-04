@@ -1,22 +1,11 @@
-<a href="https://t.me/RavelioBot">
-  <img width="3830" height="1060" alt="RavelioBot — попробовать" src="https://github.com/user-attachments/assets/d6f36dff-1377-4fd1-9529-6cc5fb2524a6" />
-</a>
+# 🤖 My Secretary Bot
 
-# 🤖 telegram-autopilot — cloud
-
-🇷🇺 [Русский](README.md) · 🇬🇧 English
-
-> **Try it now → [@RavelioBot](https://t.me/RavelioBot)**
+[Русский](README.md) · English
 
 A personal AI assistant built into your Telegram profile.  
 It reads incoming messages and replies on your behalf — when you're busy, on the go, or just want to delegate routine conversations.
 
 Connects via the official Telegram **Chat Automation** feature — no grey-area workarounds, only the official Bot API.
-
----
-
-> 🔧 Want to run it yourself?  
-> Single-user self-hosted version → [telegram-autopilot](https://github.com/demureiskander/telegram-autopilot)
 
 ---
 
@@ -33,23 +22,7 @@ Connects via the official Telegram **Chat Automation** feature — no grey-area 
 
 ---
 
-## 💳 Pricing
-
-| | Personal | Business |
-|---|---|---|
-| Messages per day | 200 | 500 |
-| Input tokens per message | 2 000 | 4 000 |
-| Output tokens per message | 1 000 | 2 000 |
-| Week | 150 ⭐ | 400 ⭐ |
-| Month | 450 ⭐ | 1 200 ⭐ |
-| 3 months | 1 100 ⭐ | 2 900 ⭐ |
-| Year | 3 600 ⭐ | 9 600 ⭐ |
-
-New users get a **16-day free trial**.
-
----
-
-## 🚀 Quick Start (self-hosted cloud)
+## 🚀 Quick Start
 
 ### Requirements
 

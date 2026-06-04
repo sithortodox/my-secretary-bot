@@ -9,6 +9,7 @@ from aiogram.types import (
 from aiogram.exceptions import TelegramBadRequest
 
 from logger import logger
+from config import LLM_MODEL
 from database.db import (
     get_user, update_user_setting,
     get_stats, get_chat_list, get_chat_messages,
@@ -16,7 +17,7 @@ from database.db import (
     clear_history, clear_all_history,
     get_today_messages, set_offline_mode,
 )
-from services.llm import AVAILABLE_MODELS
+from services.llm import ask_llm
 
 router = Router()
 
@@ -390,22 +391,23 @@ async def on_prompt_input(message: Message, state: FSMContext):
 async def on_model_menu(callback: CallbackQuery):
     await callback.answer()
     user = await get_user(callback.from_user.id)
-    current = user["active_model"] or "mimo-v2.5"
+    current = user["active_model"] or LLM_MODEL
 
-    buttons = []
-    for model_id, desc in AVAILABLE_MODELS.items():
-        check = "✅ " if model_id == current else ""
-        buttons.append([InlineKeyboardButton(
-            text=f"{check}{desc}",
-            callback_data=f"adm:model_set:{model_id}"
-        )])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="adm:menu")])
+    # Доступные модели (пользователь может ввести свою)
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"✅ {current}" if current == LLM_MODEL else f"   {LLM_MODEL}",
+            callback_data=f"adm:model_set:{LLM_MODEL}"
+        )],
+        [InlineKeyboardButton(text="✏️ Ввести свою модель", callback_data="adm:model_custom")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="adm:menu")],
+    ]
 
     await safe_edit(callback,
         "🤖 <b>Выбор модели</b>\n\n"
-        "✅ — активная сейчас\n\n"
-        "<b>MiMo V2.5</b> — основная модель\n"
-        "<b>MiMo V2 Flash</b> — быстрая модель",
+        f"Текущая: <code>{current}</code>\n\n"
+        "Введите любую модель от вашего провайдера.\n"
+        "Примеры: gpt-4o, deepseek-chat, claude-3-sonnet",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
@@ -413,14 +415,25 @@ async def on_model_menu(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("adm:model_set:"))
 async def on_model_set(callback: CallbackQuery):
     model_id = callback.data.split("adm:model_set:")[1]
-    if model_id not in AVAILABLE_MODELS:
-        await callback.answer("Неизвестная модель")
-        return
     await update_user_setting(callback.from_user.id, "active_model", model_id)
     logger.info(f'[ADMIN] user_id={callback.from_user.id} model changed to {model_id}')
     await callback.answer("✅ Модель обновлена")
     await on_model_menu(callback)
 
+
+@router.callback_query(F.data == "adm:model_custom")
+async def on_model_custom(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("Введите название модели (например: gpt-4o, deepseek-chat):")
+    # Ждём ввода от пользователя
+    @router.message(F.from_user.id == callback.from_user.id, F.text)
+    async def handle_custom_model(message: Message):
+        model_name = message.text.strip()
+        if model_name:
+            await update_user_setting(message.from_user.id, "active_model", model_name)
+            logger.info(f'[ADMIN] user_id={message.from_user.id} custom model set to {model_name}')
+            await message.answer(f"✅ Модель установлена: <code>{model_name}</code>")
+    
 
 @router.callback_query(F.data == "adm:clear_menu")
 async def on_clear_menu(callback: CallbackQuery):

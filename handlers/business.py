@@ -5,7 +5,7 @@ from aiogram import Router, Bot
 from aiogram.types import Message, BusinessConnection, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import MessageEntityType
 
-from config import MAX_HISTORY
+from config import MAX_HISTORY, LLM_MODEL
 from database.db import (
     get_user, get_history, get_history_30_days, get_chat_stats_30_days,
     save_message, upsert_chat, get_note, set_note, set_connected,
@@ -235,7 +235,7 @@ async def handle_business_message(message: Message, bot: Bot):
     if len(history_30_days) >= 10:
         deep_analysis = await analyze_conversation_30_days(
             history_30_days, chat_stats,
-            active_model=user["active_model"] or "mimo-v2.5"
+            active_model=user["active_model"] or LLM_MODEL
         )
 
     # Анализируем стиль общения владельца с этим контактом
@@ -248,7 +248,7 @@ async def handle_business_message(message: Message, bot: Bot):
                 owner_responses.append(content)
         if len(owner_responses) >= 3:
             owner_style = await analyze_communication_style(
-                owner_responses, sender_name or str(chat_id), active_model=user["active_model"] or "mimo-v2.5"
+                owner_responses, sender_name or str(chat_id), active_model=user["active_model"] or LLM_MODEL
             )
 
     # Строим системный промпт с чёткой структурой
@@ -317,7 +317,7 @@ async def handle_business_message(message: Message, bot: Bot):
     )
 
     history = await get_history(owner_id, chat_id, limit=MAX_HISTORY)
-    active_model = user["active_model"] or "mimo-v2.5"
+    active_model = user["active_model"] or LLM_MODEL
 
     # Проверяем срочность сообщения
     urgency = _detect_urgency(display_text)
@@ -430,7 +430,7 @@ async def _generate_and_send_reply(
     message: Message,
 ) -> None:
     """Генерирует и отправляет ответ (вызывается после 15 минут ожидания)."""
-    active_model = user["active_model"] or "mimo-v2.5"
+    active_model = user["active_model"] or LLM_MODEL
     display_text = message_text
 
     # Считаем сколько раз уже общались

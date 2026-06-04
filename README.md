@@ -57,10 +57,10 @@ cp .env.example .env
 BOT_TOKEN=токен_из_BotFather
 OWNER_ID=ваш_telegram_id        # получите через @userinfobot
 LLM_API_KEY=ключ_от_провайдера
-LLM_BASE_URL=https://openrouter.ai/api/v1/chat/completions
-LLM_MODEL=deepseek/deepseek-chat-v3-0324:free
+LLM_BASE_URL=https://api.openai.com/v1/chat/completions
+LLM_MODEL=gpt-4o
 DB_PATH=bot.db
-MAX_HISTORY=12
+MAX_HISTORY=50
 BOT_USERNAME=@YourBotUsername    # замените на юзернейм своего бота
 ```
 
