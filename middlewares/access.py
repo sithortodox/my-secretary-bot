@@ -33,7 +33,7 @@ class AccessMiddleware(BaseMiddleware):
                     from_user.username or "",
                     from_user.first_name or "",
                 )
-                logger.info(f"[NEW_USER] user_id={user_id} username=@{from_user.username} name='{from_user.first_name}'")
+                logger.info(f"[NEW_USER] user_id={user_id}")
             
             data["user_id"] = user_id
 

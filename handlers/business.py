@@ -136,6 +136,12 @@ async def handle_business_message(message: Message, bot: Bot):
     media_type = _get_media_type(message)
     user_text = message.text or message.caption or ""
 
+    # Ограничиваем длину сообщения
+    from config import MAX_MESSAGE_LENGTH
+    if len(user_text) > MAX_MESSAGE_LENGTH:
+        user_text = user_text[:MAX_MESSAGE_LENGTH]
+        logger.debug(f"[MSG] owner_id={owner_id} message truncated to {MAX_MESSAGE_LENGTH} chars")
+
     # Если нет ни текста, ни полезного контента — пропускаем
     if not user_text and media_type in ("document", "video"):
         return
@@ -181,7 +187,7 @@ async def handle_business_message(message: Message, bot: Bot):
         sender_name = " ".join(parts).strip()
         sender_username = f"@{message.from_user.username}" if message.from_user.username else "нет username"
 
-    logger.info(f"[MSG] owner_id={owner_id} chat_id={chat_id} from='{sender_name}' media={media_type}")
+    logger.info(f"[MSG] owner_id={owner_id} chat_id={chat_id} media={media_type}")
 
     # Проверяем эскалацию — если уже замаркирован как эскалированный, не отвечаем
     if await get_escalated(owner_id, chat_id):
@@ -532,7 +538,8 @@ async def _generate_and_send_reply(
         try:
             photo = message.photo[-1]
             file = await bot.get_file(photo.file_id)
-            image_url = f"https://api.telegram.org/file/bot{(await bot.get_me()).token}/{file.file_path}"
+            from config import BOT_TOKEN
+            image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
 
             vision_prompt = (
                 "Ты — AI-ассистент встроенный в Telegram профиль пользователя. "
@@ -696,8 +703,18 @@ async def _send_escalation(
 
 async def on_escalation_reply(callback, bot: Bot) -> None:
     """Обработчик кнопки 'Ответить' — помечает чат как эскалированный."""
-    parts = callback.data.split(":")
-    chat_id = int(parts[2])
+    from services.utils import safe_split_callback, safe_int
+    
+    parts = safe_split_callback(callback.data, min_parts=3)
+    if not parts:
+        await callback.answer("❌ Invalid callback data", show_alert=True)
+        return
+    
+    chat_id = safe_int(parts[2], "chat_id")
+    if chat_id is None:
+        await callback.answer("❌ Invalid chat ID", show_alert=True)
+        return
+    
     owner_id = callback.from_user.id
 
     await set_escalated(owner_id, chat_id, True)
@@ -711,8 +728,18 @@ async def on_escalation_reply(callback, bot: Bot) -> None:
 
 async def on_escalation_auto(callback, bot: Bot) -> None:
     """Обработчик кнопки 'Автоответ' — разрешает боту отвечать."""
-    parts = callback.data.split(":")
-    chat_id = int(parts[2])
+    from services.utils import safe_split_callback, safe_int
+    
+    parts = safe_split_callback(callback.data, min_parts=3)
+    if not parts:
+        await callback.answer("❌ Invalid callback data", show_alert=True)
+        return
+    
+    chat_id = safe_int(parts[2], "chat_id")
+    if chat_id is None:
+        await callback.answer("❌ Invalid chat ID", show_alert=True)
+        return
+    
     owner_id = callback.from_user.id
 
     await set_escalated(owner_id, chat_id, False)

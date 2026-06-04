@@ -1,10 +1,12 @@
 import aiosqlite
 from datetime import datetime, timedelta
 from config import DB_PATH, SYSTEM_PROMPT_DEFAULT
+from logger import logger
 
 
 async def init_db() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id            INTEGER PRIMARY KEY,
@@ -142,25 +144,35 @@ async def init_db() -> None:
                 pass
 
         await db.commit()
+    except Exception as e:
+        logger.critical(f"Failed to initialize database: {e}", exc_info=True)
+        raise
 
 
 async def get_user(user_id: int) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM users WHERE user_id = ?", (user_id,)
-        ) as c:
-            row = await c.fetchone()
-            return dict(row) if row else None
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM users WHERE user_id = ?", (user_id,)
+            ) as c:
+                row = await c.fetchone()
+                return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"DB error in get_user: {e}")
+        return None
 
 
 async def register_user(user_id: int, username: str, first_name: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT OR IGNORE INTO users (user_id, username, first_name, system_prompt)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, username, first_name, SYSTEM_PROMPT_DEFAULT))
-        await db.commit()
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT OR IGNORE INTO users (user_id, username, first_name, system_prompt)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, username, first_name, SYSTEM_PROMPT_DEFAULT))
+            await db.commit()
+    except Exception as e:
+        logger.error(f"DB error in register_user: {e}")
 
 
 async def update_user_setting(user_id: int, key: str, value) -> None:
@@ -238,12 +250,15 @@ async def get_chat_stats_30_days(user_id: int, chat_id: int) -> dict:
 
 
 async def save_message(user_id: int, chat_id: int, role: str, content: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO messages (user_id, chat_id, role, content)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, chat_id, role, content))
-        await db.commit()
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO messages (user_id, chat_id, role, content)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, chat_id, role, content))
+            await db.commit()
+    except Exception as e:
+        logger.error(f"DB error in save_message: {e}")
 
 
 async def save_pending_message(
@@ -257,31 +272,39 @@ async def save_pending_message(
     delay_minutes: int = 15,
 ) -> int:
     """Сохраняет входящее сообщение как ожидающее ответа."""
-    from datetime import datetime, timedelta
-    async with aiosqlite.connect(DB_PATH) as db:
-        expires_at = datetime.now() + timedelta(minutes=delay_minutes)
-        cursor = await db.execute("""
-            INSERT INTO pending_messages (
-                owner_id, chat_id, sender_name, sender_username,
-                message_text, media_type, business_connection_id, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (owner_id, chat_id, sender_name, sender_username,
-              message_text, media_type, business_connection_id, expires_at.isoformat()))
-        await db.commit()
-        return cursor.lastrowid
+    try:
+        from datetime import datetime, timedelta
+        async with aiosqlite.connect(DB_PATH) as db:
+            expires_at = datetime.now() + timedelta(minutes=delay_minutes)
+            cursor = await db.execute("""
+                INSERT INTO pending_messages (
+                    owner_id, chat_id, sender_name, sender_username,
+                    message_text, media_type, business_connection_id, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (owner_id, chat_id, sender_name, sender_username,
+                  message_text, media_type, business_connection_id, expires_at.isoformat()))
+            await db.commit()
+            return cursor.lastrowid
+    except Exception as e:
+        logger.error(f"DB error in save_pending_message: {e}")
+        return 0
 
 
 async def get_pending_messages(owner_id: int, chat_id: int) -> list[dict]:
     """Получает ожидающие сообщения для чата."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-            SELECT id, message_text, sender_name, expires_at
-            FROM pending_messages
-            WHERE owner_id = ? AND chat_id = ? AND status = 'pending'
-            ORDER BY created_at ASC
-        """, (owner_id, chat_id)) as c:
-            rows = await c.fetchall()
-            return [{"id": r[0], "text": r[1], "sender": r[2], "expires": r[3]} for r in rows]
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+                SELECT id, message_text, sender_name, expires_at
+                FROM pending_messages
+                WHERE owner_id = ? AND chat_id = ? AND status = 'pending'
+                ORDER BY created_at ASC
+            """, (owner_id, chat_id)) as c:
+                rows = await c.fetchall()
+                return [{"id": r[0], "text": r[1], "sender": r[2], "expires": r[3]} for r in rows]
+    except Exception as e:
+        logger.error(f"DB error in get_pending_messages: {e}")
+        return []
 
 
 async def get_expired_pending_messages() -> list[dict]:
